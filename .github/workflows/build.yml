@@ -42,6 +42,8 @@ jobs:
           EPS_ERR_CODE SetupJobAttrib(const EPS_JOB_ATTRIB*);\
           EPS_ERR_CODE SendStartJob(EPS_BOOL);\
           EPS_ERR_CODE PrintBand(const EPS_UINT8*, EPS_UINT32, EPS_UINT32*);|' src/filter.c
+          sed -i '' 's|^#include "libprtX.h"$|#include "libprtX.h"\
+          #include "custompage.h"|' src/wrapper.c
           grep -n -A1 'include "mem.h"' src/mem.c
           grep -n -A5 'include "custompage.h"' src/filter.c
           ./configure \
