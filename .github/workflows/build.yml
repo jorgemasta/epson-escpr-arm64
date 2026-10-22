@@ -46,7 +46,8 @@ jobs:
           #include "custompage.h"|' src/wrapper.c
           grep -n -A1 'include "mem.h"' src/mem.c
           grep -n -A5 'include "custompage.h"' src/filter.c
-          ./configure \
+          # Upstream gates its POSIX code on unix/__unix; Apple clang only defines __unix__.
+          CPPFLAGS="-D__unix=1" ./configure \
             --disable-shared --enable-static \
             --with-cupsfilterdir="$INSTALL_DIR/filter" \
             --with-cupsppddir="$INSTALL_DIR/ppd"
