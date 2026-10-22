@@ -1,0 +1,58 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ESCPR_VERSION: 1.8.8
+  # Debian's orig tarball of Epson's GPL ESC/P-R driver, pinned by hash.
+  ESCPR_URL: https://snapshot.debian.org/file/7af16f3335b1284ff350555cb2c60c459776d768
+  ESCPR_SHA256: 8a0430d9d596fd8efa5dda6467ffa0ac06fd88be16544e486ac68eeb3d74defb
+  # Where the filters live on the Mac; /usr/libexec/cups is SIP-protected.
+  INSTALL_DIR: /Library/Printers/EPSON-escpr
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify source
+        run: |
+          curl -fsSL -o escpr.tar.gz "$ESCPR_URL"
+          echo "$ESCPR_SHA256  escpr.tar.gz" | shasum -a 256 -c -
+          tar -xzf escpr.tar.gz
+
+      - name: Build (arm64, static libescpr)
+        working-directory: epson-inkjet-printer-escpr-${{ env.ESCPR_VERSION }}
+        run: |
+          uname -m
+          ./configure \
+            --disable-shared --enable-static \
+            --with-cupsfilterdir="$INSTALL_DIR/filter" \
+            --with-cupsppddir="$INSTALL_DIR/ppd"
+          make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Stage package
+        run: |
+          src=epson-inkjet-printer-escpr-$ESCPR_VERSION
+          mkdir -p out/filter out/ppd
+          cp "$src/src/epson-escpr" "$src/src/epson-escpr-wrapper" out/filter/
+          # CUPS only looks up bare filter names in its own SIP-protected dir.
+          sed "s|^\*cupsFilter: \"application/vnd.cups-raster 0 epson-escpr-wrapper\"|*cupsFilter: \"application/vnd.cups-raster 0 $INSTALL_DIR/filter/epson-escpr-wrapper\"|" \
+            "$src/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd" > out/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd
+          grep cupsFilter out/ppd/*.ppd
+          cp install.sh out/
+          cp "$src/COPYING" out/COPYING
+          file out/filter/*
+          otool -L out/filter/*
+          (cd out && shasum -a 256 filter/* ppd/* install.sh | tee SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: epson-escpr-arm64-${{ env.ESCPR_VERSION }}
+          path: out/
