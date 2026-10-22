@@ -34,9 +34,17 @@ jobs:
           # Tarball timestamps make make re-run automake 1.16; regenerate with the runner's.
           brew install autoconf automake libtool
           autoreconf -fi
-          # Upstream calls a few undeclared functions; all return int32/void and take
-          # pointer/int args (err_system only its fixed arg), so implicit calls are ABI-safe.
-          CFLAGS="-O2 -Wno-error=implicit-function-declaration" ./configure \
+          # Upstream calls a few undeclared functions, which clang rejects; declare them.
+          sed -i '' 's|^#include "mem.h"$|#include "mem.h"\
+          #include "err.h"|' src/mem.c
+          sed -i '' 's|^#include "custompage.h"$|#include "custompage.h"\
+          void obsClear(void);\
+          EPS_ERR_CODE SetupJobAttrib(const EPS_JOB_ATTRIB*);\
+          EPS_ERR_CODE SendStartJob(EPS_BOOL);\
+          EPS_ERR_CODE PrintBand(const EPS_UINT8*, EPS_UINT32, EPS_UINT32*);|' src/filter.c
+          grep -n -A1 'include "mem.h"' src/mem.c
+          grep -n -A5 'include "custompage.h"' src/filter.c
+          ./configure \
             --disable-shared --enable-static \
             --with-cupsfilterdir="$INSTALL_DIR/filter" \
             --with-cupsppddir="$INSTALL_DIR/ppd"
