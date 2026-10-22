@@ -1,0 +1,186 @@
+--- a/src/wrapper.c	2026-10-22 22:26:18
++++ b/src/wrapper.c	2026-10-22 22:27:13
+@@ -47,6 +47,10 @@
+ static int get_option_for_arg (const char *, filter_option_t *);
+ /* Get value for PPD. */
+ static char * get_default_choice (ppd_file_t *, const char *);
++/* Copy a job option into a NAME_MAX field; fail instead of overflowing. */
++static int copy_option (char *, const char *);
++/* True if every char is safe to pass unquoted (or quoted, with spaces) to the shell. */
++static int is_shell_safe (const char *, int);
+ 
+ /* added 22-04-2004 */
+ static void sig_set (void);
+@@ -202,6 +206,7 @@
+ 	int total_read_cache = 0;
+ 	char *page_raw = NULL;      //2ページ分のバッファ
+ 	char *page_raw_cache = NULL;//2ページ分のキャッシュ
++	size_t page_bytes = 0;      // one page of page_raw, as allocated for the first page
+ 
+ 	static BOOL first_fwrite = TRUE;
+ 	static BOOL cache_exist = FALSE;
+@@ -308,12 +313,33 @@
+ 
+ 		int image_bytes;
+ 		char *image_raw;
++
++		// Bound the geometry so the 32-bit size math below cannot wrap (A3 at 5760 dpi fits).
++		if (header.cupsBytesPerLine == 0 || header.cupsBytesPerLine > (1u << 20)
++			|| header.cupsHeight > (1u << 18))
++		{
++			fprintf (stderr, "ERROR: Unsupported page geometry.\n");
++			return 1;
++		}
+ 
+ 		if (pfp == NULL)
+ 		{
+-			char tmpbuf[256];
++			char tmpbuf[512];
++			int cmd_len;
+ 
+-			sprintf (tmpbuf, "%s/%s \"%s\" %d %d %d %s %s %s %s %s %s %s %s %s",
++			// Job options reach a shell command line; reject anything that could break out.
++			if (!is_shell_safe (fopt.model, 1)
++				|| !is_shell_safe (fopt.ink, 0) || !is_shell_safe (fopt.media, 0)
++				|| !is_shell_safe (fopt.quality, 0) || !is_shell_safe (fopt.duplex, 0)
++				|| !is_shell_safe (fopt.inputslot, 0) || !is_shell_safe (fopt.brightness, 0)
++				|| !is_shell_safe (fopt.contrast, 0) || !is_shell_safe (fopt.saturation, 0)
++				|| !is_shell_safe (fopt.quietmode, 0))
++			{
++				fprintf (stderr, "ERROR: Invalid characters in print options.\n");
++				return 1;
++			}
++
++			cmd_len = snprintf (tmpbuf, sizeof (tmpbuf), "%s/%s \"%s\" %d %d %d %s %s %s %s %s %s %s %s %s",
+ 				 CUPS_FILTER_PATH,
+ 				 CUPS_FILTER_NAME,
+ 				 fopt.model,
+@@ -330,7 +356,12 @@
+ 				 fopt.saturation,
+ 				 fopt.quietmode
+ 			);
+-		
++			if (cmd_len < 0 || (size_t) cmd_len >= sizeof (tmpbuf))
++			{
++				fprintf (stderr, "ERROR: Print options too long.\n");
++				return 1;
++			}
++
+ 			debug_msg("tmpbuf = [%s]\n", tmpbuf);
+ 
+ #if (HAVE_PPM_W)
+@@ -356,10 +387,24 @@
+ 
+ 			if (!customsize_flag) {
+ 				//2 page分のバッファを確保
+-				image_bytes = (WIDTH_BYTES(header.cupsBytesPerLine * 8 ) * header.cupsHeight + 1) * 2;
+-				page_raw = (char *)calloc (sizeof (char), image_bytes);
+-				page_raw_cache = (char *)calloc (sizeof (char), image_bytes);
++				page_bytes = (size_t) WIDTH_BYTES(header.cupsBytesPerLine * 8 ) * header.cupsHeight;
++				// +2 per page: the page-count byte plus the 1-byte overrun of the cache memcpy
++				page_raw = (char *)calloc (1, (page_bytes + 2) * 2);
++				page_raw_cache = (char *)calloc (1, (page_bytes + 2) * 2);
++				if (page_raw == NULL || page_raw_cache == NULL)
++				{
++					fprintf (stderr, "ERROR: Out of memory.\n");
++					return 1;
++				}
+ 			}
++		}
++
++		// Buffers are sized from the first page; a larger later page would overflow them.
++		if (!customsize_flag
++			&& (size_t) WIDTH_BYTES(header.cupsBytesPerLine * 8 ) * header.cupsHeight > page_bytes)
++		{
++			fprintf (stderr, "ERROR: Page size changed within the job.\n");
++			return 1;
+ 		}
+ 
+ 		image_bytes = WIDTH_BYTES(header.cupsBytesPerLine * 8 ) * CUPS_READ_LINE;
+@@ -676,7 +721,8 @@
+ 
+ 	opt = cupsGetOption ("Ink", opt_num, option_p);
+ 	if (opt)
+-		strcpy (filter_opt_p->ink, opt);
++		if (copy_option (filter_opt_p->ink, opt))
++			return 1;
+ 
+ 	opt = cupsGetOption ("MediaType", opt_num, option_p);
+ 	if(!opt){
+@@ -685,37 +731,69 @@
+ 
+ 	if (opt)
+ 	{
+-		strcpy (filter_opt_p->quality, opt);
++		if (copy_option (filter_opt_p->quality, opt))
++			return 1;
+ 	}
+ 
+ 	opt = cupsGetOption ("Duplex", opt_num, option_p);
+ 	if (opt)
+-		strcpy (filter_opt_p->duplex, opt);
++		if (copy_option (filter_opt_p->duplex, opt))
++			return 1;
+ 
+ 	opt = cupsGetOption ("InputSlot", opt_num, option_p);
+ 	if (opt)
+-		strcpy (filter_opt_p->inputslot, opt);
++		if (copy_option (filter_opt_p->inputslot, opt))
++			return 1;
+ 
+ 	opt = cupsGetOption ("Brightness", opt_num, option_p);
+ 	if (opt)
+-		strcpy (filter_opt_p->brightness, opt);
++		if (copy_option (filter_opt_p->brightness, opt))
++			return 1;
+ 
+ 	opt = cupsGetOption ("Contrast", opt_num, option_p);
+ 	if (opt)
+-		strcpy (filter_opt_p->contrast, opt);
++		if (copy_option (filter_opt_p->contrast, opt))
++			return 1;
+ 
+ 	opt = cupsGetOption ("Saturation", opt_num, option_p);
+ 	if (opt)
+-		strcpy (filter_opt_p->saturation, opt);
++		if (copy_option (filter_opt_p->saturation, opt))
++			return 1;
+ 
+ 	opt = cupsGetOption ("QuietMode", opt_num, option_p);
+ 	if (opt)
+-		strcpy (filter_opt_p->quietmode, opt);
++		if (copy_option (filter_opt_p->quietmode, opt))
++			return 1;
++
++	return 0;
++}
+ 
++
++/* Copy a job option into a NAME_MAX field; fail instead of overflowing. */
++static int
++copy_option (char *dst, const char *src)
++{
++	if (strlen (src) > NAME_MAX)
++		return 1;
++	strcpy (dst, src);
+ 	return 0;
+ }
+ 
+ 
++/* True if every char is safe to pass unquoted (or quoted, with spaces) to the shell. */
++static int
++is_shell_safe (const char *s, int allow_space)
++{
++	for (; *s; s ++)
++	{
++		if (!isalnum ((unsigned char) *s) && *s != '_' && *s != '.' && *s != '-'
++			&& !(allow_space && *s == ' '))
++			return 0;
++	}
++	return 1;
++}
++
++
+ /* Get value for PPD */
+ static char *
+ get_default_choice (ppd_file_t *ppd_p, const char *key)

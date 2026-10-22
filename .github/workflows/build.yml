@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download and verify source
         run: |
@@ -34,6 +34,8 @@ jobs:
           # Tarball timestamps make make re-run automake 1.16; regenerate with the runner's.
           brew install autoconf automake libtool
           autoreconf -fi
+          # Our own fixes for upstream bugs found in review (shell injection, overflows).
+          patch -p1 < ../patches/0001-harden-wrapper.patch
           # Upstream calls a few undeclared functions, which clang rejects; declare them.
           sed -i '' 's|^#include "mem.h"$|#include "mem.h"\
           #include "err.h"|' src/mem.c
@@ -44,10 +46,14 @@ jobs:
           EPS_ERR_CODE PrintBand(const EPS_UINT8*, EPS_UINT32, EPS_UINT32*);|' src/filter.c
           sed -i '' 's|^#include "libprtX.h"$|#include "libprtX.h"\
           #include "custompage.h"|' src/wrapper.c
-          grep -n -A1 'include "mem.h"' src/mem.c
-          grep -n -A5 'include "custompage.h"' src/filter.c
+          # Fail loudly if a sed above stopped matching upstream.
+          grep -q '^#include "err.h"$' src/mem.c
+          grep -q '^EPS_ERR_CODE PrintBand(' src/filter.c
+          grep -q '^#include "custompage.h"$' src/wrapper.c
           # Upstream gates its POSIX code on unix/__unix; Apple clang only defines __unix__.
-          CPPFLAGS="-D__unix=1" ./configure \
+          # Fortify and stack protector turn any remaining overflow into an abort.
+          CPPFLAGS="-D__unix=1 -D_FORTIFY_SOURCE=2" \
+          CFLAGS="-O2 -fstack-protector-strong" ./configure \
             --disable-shared --enable-static \
             --with-cupsfilterdir="$INSTALL_DIR/filter" \
             --with-cupsppddir="$INSTALL_DIR/ppd"
@@ -61,14 +67,15 @@ jobs:
           # CUPS only looks up bare filter names in its own SIP-protected dir.
           sed "s|^\*cupsFilter: \"application/vnd.cups-raster 0 epson-escpr-wrapper\"|*cupsFilter: \"application/vnd.cups-raster 0 $INSTALL_DIR/filter/epson-escpr-wrapper\"|" \
             "$src/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd" > out/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd
-          grep cupsFilter out/ppd/*.ppd
-          cp install.sh out/
+          grep -q "^\*cupsFilter: \"application/vnd.cups-raster 0 $INSTALL_DIR/filter/epson-escpr-wrapper\"$" out/ppd/*.ppd
+          strings out/filter/epson-escpr-wrapper | grep -q "^$INSTALL_DIR/filter$"
+          cp install.sh uninstall.sh out/
           cp "$src/COPYING" out/COPYING
           file out/filter/*
           otool -L out/filter/*
-          (cd out && shasum -a 256 filter/* ppd/* install.sh | tee SHA256SUMS)
+          (cd out && shasum -a 256 filter/* ppd/* install.sh uninstall.sh | tee SHA256SUMS)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: epson-escpr-arm64-${{ env.ESCPR_VERSION }}
           path: out/
