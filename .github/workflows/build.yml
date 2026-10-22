@@ -34,7 +34,9 @@ jobs:
           # Tarball timestamps make make re-run automake 1.16; regenerate with the runner's.
           brew install autoconf automake libtool
           autoreconf -fi
-          ./configure \
+          # Upstream calls a few undeclared functions; all return int32/void and take
+          # pointer/int args (err_system only its fixed arg), so implicit calls are ABI-safe.
+          CFLAGS="-O2 -Wno-error=implicit-function-declaration" ./configure \
             --disable-shared --enable-static \
             --with-cupsfilterdir="$INSTALL_DIR/filter" \
             --with-cupsppddir="$INSTALL_DIR/ppd"
