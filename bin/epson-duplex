@@ -66,86 +66,108 @@ function askForBacks(sheets) {
 	alert.icon = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('printer.fill', 'Printer')
 	alert.messageText = 'Turn the pages over for the back side'
 	alert.informativeText =
-		`1. Wait until all ${sheets} sheet${sheets > 1 ? 's have' : ' has'} come out.\n` +
-		'2. Take the stack without changing its order.\n' +
-		'3. Put it back in the rear tray as shown: printed side facing the back ' +
-		'of the printer, top of the page going in first.\n' +
-		'4. Click Print Backs.\n\n' +
+		`1. Wait until ${sheets > 1 ? `all ${sheets} sheets have` : 'the sheet has'} come out.\n` +
+		'2. Take the whole stack without changing its order.\n' +
+		'3. Follow the pictures below, then click Print Backs.\n\n' +
 		'When the backs finish, turn the whole stack over: page 1 is on top.'
 	alert.addButtonWithTitle('Print Backs')
 	alert.addButtonWithTitle('Cancel')
-	const view = $.NSImageView.alloc.initWithFrame($.NSMakeRect(0, 0, 420, 230))
+	const view = $.NSImageView.alloc.initWithFrame($.NSMakeRect(0, 0, 538, 210))
 	view.image = diagram()
 	alert.accessoryView = view
 	$.NSApp.activateIgnoringOtherApps(true)
 	return alert.runModal === $.NSAlertFirstButtonReturn
 }
 
-/** Side view of the printer showing how to reload the stack for the backs. */
+/** Three-step picture: hold the top page readable, flip it over the top, load it in the rear tray. */
 function diagram() {
-	const W = 420, H = 230
+	const P = 170, GAP = 14, W = P * 3 + GAP * 2, H = 210
 	const img = $.NSImage.alloc.initWithSize($.NSMakeSize(W, H))
+	// Resolve system colours for the current light or dark mode; the alert background is translucent.
+	$.NSAppearance.currentAppearance = $.NSApp.effectiveAppearance
 	img.lockFocus
-	const ink = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.13, 0.13, 0.15, 1)
-	const accent = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.0, 0.45, 0.9, 1)
-	const grey = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.55, 0.56, 0.6, 1)
-	const card = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(0, 0, W, H), 12, 12)
-	$.NSColor.whiteColor.set; card.fill
+	const ink = rgb(0.13, 0.13, 0.15), accent = $.NSColor.systemBlueColor, grey = rgb(0.55, 0.56, 0.6)
+	const paper = rgb(1, 1, 1), label = $.NSColor.labelColor
+	const card = label.colorWithAlphaComponent(0.06)
 
-	const text = (s, x, y, size, color, bold) => {
-		const font = bold ? $.NSFont.boldSystemFontOfSize(size) : $.NSFont.systemFontOfSize(size)
-		const attrs = $.NSMutableDictionary.dictionary
-		attrs.setObjectForKey(font, $.NSFontAttributeName)
-		attrs.setObjectForKey(color, $.NSForegroundColorAttributeName)
-		$(s).drawAtPointWithAttributes($.NSMakePoint(x, y), attrs)
+	const rect = (x, y, w, h, fill, stroke, r) => {
+		const p = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(x, y, w, h), r || 0, r || 0)
+		if (fill) { fill.set; p.fill }
+		if (stroke) { p.lineWidth = 1.5; stroke.set; p.stroke }
 	}
-	const line = (pts, color, width) => {
+	const text = (s, x, y, size, color, bold, width) => {
+		const style = $.NSMutableParagraphStyle.alloc.init
+		style.alignment = 1 // centred
+		const attrs = $.NSMutableDictionary.dictionary
+		attrs.setObjectForKey(bold ? $.NSFont.boldSystemFontOfSize(size) : $.NSFont.systemFontOfSize(size), $.NSFontAttributeName)
+		attrs.setObjectForKey(color, $.NSForegroundColorAttributeName)
+		attrs.setObjectForKey(style, $.NSParagraphStyleAttributeName)
+		$(s).drawInRectWithAttributes($.NSMakeRect(x, y, width, size * 2.6), attrs)
+	}
+	const arrow = (pts, color, curve) => {
 		const p = $.NSBezierPath.bezierPath
 		p.moveToPoint($.NSMakePoint(pts[0][0], pts[0][1]))
-		pts.slice(1).forEach(q => p.lineToPoint($.NSMakePoint(q[0], q[1])))
-		p.lineWidth = width; p.lineCapStyle = 1; p.lineJoinStyle = 1
-		color.set; p.stroke
+		if (curve) p.curveToPointControlPoint1ControlPoint2($.NSMakePoint(pts[3][0], pts[3][1]),
+			$.NSMakePoint(pts[1][0], pts[1][1]), $.NSMakePoint(pts[2][0], pts[2][1]))
+		else p.lineToPoint($.NSMakePoint(pts[1][0], pts[1][1]))
+		p.lineWidth = 3; p.lineCapStyle = 1; color.set; p.stroke
+		const [ex, ey] = pts[pts.length - 1], [px, py] = pts[pts.length - 2]
+		const n = Math.hypot(ex - px, ey - py), ux = (ex - px) / n, uy = (ey - py) / n, s = 10
+		const h = $.NSBezierPath.bezierPath
+		h.moveToPoint($.NSMakePoint(ex + ux * 4, ey + uy * 4))
+		h.lineToPoint($.NSMakePoint(ex - ux * s - uy * s * 0.7, ey - uy * s + ux * s * 0.7))
+		h.lineToPoint($.NSMakePoint(ex - ux * s + uy * s * 0.7, ey - uy * s - ux * s * 0.7))
+		h.closePath; h.fill
 	}
-	const arrowHead = (x, y, dx, dy, color) => {
-		const n = Math.hypot(dx, dy), ux = dx / n, uy = dy / n, s = 11
-		const p = $.NSBezierPath.bezierPath
-		p.moveToPoint($.NSMakePoint(x, y))
-		p.lineToPoint($.NSMakePoint(x - ux * s - uy * s * 0.6, y - uy * s + ux * s * 0.6))
-		p.lineToPoint($.NSMakePoint(x - ux * s + uy * s * 0.6, y - uy * s - ux * s * 0.6))
-		p.closePath; color.set; p.fill
+	// A sample printed page; seen through the paper (flipped over the top) it is faint and upside down.
+	const sample = (x, y, w, h, throughPaper) => {
+		const a = throughPaper ? 0.22 : 1
+		const block = (rx, ry, rw, rh, color) => {
+			const top = throughPaper ? y + ry * h : y + h - (ry + rh) * h
+			rect(x + rx * w, top, rw * w, rh * h, color.colorWithAlphaComponent(a), null, 1.5)
+		}
+		block(0.12, 0.08, 0.6, 0.08, ink)
+		block(0.12, 0.22, 0.34, 0.24, accent)
+		for (let i = 0; i < 4; i++) block(0.52, 0.23 + i * 0.06, 0.36, 0.025, grey)
+		for (let i = 0; i < 6; i++) block(0.12, 0.54 + i * 0.065, i === 5 ? 0.45 : 0.76, 0.025, grey)
+	}
+	const step = (n, x, caption) => {
+		rect(x, 0, P, H, card, null, 12)
+		text(String(n), x + 6, H - 42, 15, accent, true, 24)
+		text(caption, x + 8, 4, 12, label, false, P - 16)
 	}
 
-	// Floor and printer body, front on the right where you stand.
-	line([[20, 34], [W - 20, 34]], grey, 1.5)
-	const body = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(150, 34, 170, 70), 10, 10)
-	$.NSColor.colorWithSRGBRedGreenBlueAlpha(0.9, 0.91, 0.93, 1).set; body.fill
-	body.lineWidth = 2; ink.set; body.stroke
-	line([[320, 50], [350, 46]], ink, 3)                      // output tray
-	text('printer', 196, 60, 13, grey, false)
-	text('front (you)', 326, 14, 11, grey, false)
-	text('back', 92, 14, 11, grey, false)
+	// 1. Hold the stack so you can read the page on top.
+	let x = 0
+	step(1, x, 'Hold the stack so you can read the top page')
+	const pw = 74, ph = 104, py = 62
+	rect(x + (P - pw) / 2, py, pw, ph, paper, grey)
+	sample(x + (P - pw) / 2, py, pw, ph, false)
 
-	// Sheet in the rear tray, leaning back; ink stripe on the side facing the back.
-	const bx = 178, by = 100, tx = 128, ty = 205
-	line([[bx, by], [tx, ty]], ink, 4)
-	line([[bx - 4, by - 1], [tx - 4, ty - 1]], accent, 4)
+	// 2. Flip it over the top, so the top ends up at the bottom.
+	x = P + GAP
+	step(2, x, 'Flip it over the top, like a wall calendar')
+	rect(x + (P - pw) / 2, py, pw, ph, paper, grey)
+	sample(x + (P - pw) / 2, py, pw, ph, true)
+	const cx = x + P / 2
+	arrow([[cx - 30, py + ph + 8], [cx - 24, py + ph + 34], [cx + 34, py + ph + 34], [cx + 46, py + ph - 6]], accent, true)
 
-	// Leading edge: the top of the page goes in first.
-	line([[152, 200], [180, 141]], accent, 2.5)
-	arrowHead(185, 130, 0.43, -0.9, accent)
-	text('Top of the page', 200, 190, 13, accent, true)
-	text('goes in first', 200, 174, 13, accent, true)
-
-	// Labels for each face.
-	text('Printed side', 20, 150, 13, accent, true)
-	text('faces the back', 20, 134, 13, accent, false)
-	line([[118, 155], [143, 150]], accent, 1.5)
-	text('Blank side', 232, 132, 13, ink, true)
-	text('faces you', 232, 116, 13, ink, false)
-	line([[228, 126], [172, 116]], ink, 1.5)
+	// 3. Load it in the rear tray: blank side facing you, top going in first.
+	x = (P + GAP) * 2
+	step(3, x, 'Load it in the rear tray, blank side facing you')
+	rect(x + (P - 60) / 2, 92, 60, 84, paper, grey)         // sheet standing in the rear tray
+	sample(x + (P - 60) / 2, 92, 60, 84, true)
+	rect(x + 20, 46, P - 40, 56, label.colorWithAlphaComponent(0.12), label.colorWithAlphaComponent(0.7), 8) // printer body
+	rect(x + 40, 54, P - 80, 6, label.colorWithAlphaComponent(0.7), null, 2) // output slot
+	arrow([[x + P - 30, 172], [x + P - 30, 112]], accent, false)
 
 	img.unlockFocus
 	return img
+}
+
+/** An sRGB colour. */
+function rgb(r, g, b) {
+	return $.NSColor.colorWithSRGBRedGreenBlueAlpha(r, g, b, 1)
 }
 
 function run(argv) {
