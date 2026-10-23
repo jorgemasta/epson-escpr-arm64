@@ -8,6 +8,7 @@ set -eu
 # Emit each decimal argument as one raw byte.
 bytes() {
 	for b in "$@"; do
+		# shellcheck disable=SC2059 # the format is an octal escape on purpose
 		printf "\\$(printf '%03o' "$b")"
 	done
 }
