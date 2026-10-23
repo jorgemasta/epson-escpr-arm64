@@ -8,7 +8,7 @@
 // page 1's sheet, and turning the finished stack over puts page 1 on top. An odd page
 // count gets a blank last back.
 
-ObjC.import('Foundation')
+ObjC.import('Cocoa')
 ObjC.import('PDFKit')
 
 const QUEUE = env('EPSON_QUEUE') || 'EPSON_ET_2710_arm64'
@@ -58,6 +58,96 @@ function plan(count) {
 	return { fronts, backs }
 }
 
+/** Show how to reload the stack; true when the user clicks Print Backs. */
+function askForBacks(sheets) {
+	$.NSApplication.sharedApplication
+	$.NSApp.setActivationPolicy($.NSApplicationActivationPolicyAccessory)
+	const alert = $.NSAlert.alloc.init
+	alert.icon = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('printer.fill', 'Printer')
+	alert.messageText = 'Turn the pages over for the back side'
+	alert.informativeText =
+		`1. Wait until all ${sheets} sheet${sheets > 1 ? 's have' : ' has'} come out.\n` +
+		'2. Take the stack without changing its order.\n' +
+		'3. Put it back in the rear tray as shown: printed side facing the back ' +
+		'of the printer, top of the page going in first.\n' +
+		'4. Click Print Backs.\n\n' +
+		'When the backs finish, turn the whole stack over: page 1 is on top.'
+	alert.addButtonWithTitle('Print Backs')
+	alert.addButtonWithTitle('Cancel')
+	const view = $.NSImageView.alloc.initWithFrame($.NSMakeRect(0, 0, 420, 230))
+	view.image = diagram()
+	alert.accessoryView = view
+	$.NSApp.activateIgnoringOtherApps(true)
+	return alert.runModal === $.NSAlertFirstButtonReturn
+}
+
+/** Side view of the printer showing how to reload the stack for the backs. */
+function diagram() {
+	const W = 420, H = 230
+	const img = $.NSImage.alloc.initWithSize($.NSMakeSize(W, H))
+	img.lockFocus
+	const ink = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.13, 0.13, 0.15, 1)
+	const accent = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.0, 0.45, 0.9, 1)
+	const grey = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.55, 0.56, 0.6, 1)
+	const card = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(0, 0, W, H), 12, 12)
+	$.NSColor.whiteColor.set; card.fill
+
+	const text = (s, x, y, size, color, bold) => {
+		const font = bold ? $.NSFont.boldSystemFontOfSize(size) : $.NSFont.systemFontOfSize(size)
+		const attrs = $.NSMutableDictionary.dictionary
+		attrs.setObjectForKey(font, $.NSFontAttributeName)
+		attrs.setObjectForKey(color, $.NSForegroundColorAttributeName)
+		$(s).drawAtPointWithAttributes($.NSMakePoint(x, y), attrs)
+	}
+	const line = (pts, color, width) => {
+		const p = $.NSBezierPath.bezierPath
+		p.moveToPoint($.NSMakePoint(pts[0][0], pts[0][1]))
+		pts.slice(1).forEach(q => p.lineToPoint($.NSMakePoint(q[0], q[1])))
+		p.lineWidth = width; p.lineCapStyle = 1; p.lineJoinStyle = 1
+		color.set; p.stroke
+	}
+	const arrowHead = (x, y, dx, dy, color) => {
+		const n = Math.hypot(dx, dy), ux = dx / n, uy = dy / n, s = 11
+		const p = $.NSBezierPath.bezierPath
+		p.moveToPoint($.NSMakePoint(x, y))
+		p.lineToPoint($.NSMakePoint(x - ux * s - uy * s * 0.6, y - uy * s + ux * s * 0.6))
+		p.lineToPoint($.NSMakePoint(x - ux * s + uy * s * 0.6, y - uy * s - ux * s * 0.6))
+		p.closePath; color.set; p.fill
+	}
+
+	// Floor and printer body, front on the right where you stand.
+	line([[20, 34], [W - 20, 34]], grey, 1.5)
+	const body = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(150, 34, 170, 70), 10, 10)
+	$.NSColor.colorWithSRGBRedGreenBlueAlpha(0.9, 0.91, 0.93, 1).set; body.fill
+	body.lineWidth = 2; ink.set; body.stroke
+	line([[320, 50], [350, 46]], ink, 3)                      // output tray
+	text('printer', 196, 60, 13, grey, false)
+	text('front (you)', 326, 14, 11, grey, false)
+	text('back', 92, 14, 11, grey, false)
+
+	// Sheet in the rear tray, leaning back; ink stripe on the side facing the back.
+	const bx = 178, by = 100, tx = 128, ty = 205
+	line([[bx, by], [tx, ty]], ink, 4)
+	line([[bx - 4, by - 1], [tx - 4, ty - 1]], accent, 4)
+
+	// Leading edge: the top of the page goes in first.
+	line([[152, 200], [180, 141]], accent, 2.5)
+	arrowHead(185, 130, 0.43, -0.9, accent)
+	text('Top of the page', 200, 190, 13, accent, true)
+	text('goes in first', 200, 174, 13, accent, true)
+
+	// Labels for each face.
+	text('Printed side', 20, 150, 13, accent, true)
+	text('faces the back', 20, 134, 13, accent, false)
+	line([[118, 155], [143, 150]], accent, 1.5)
+	text('Blank side', 232, 132, 13, ink, true)
+	text('faces you', 232, 116, 13, ink, false)
+	line([[228, 126], [172, 116]], ink, 1.5)
+
+	img.unlockFocus
+	return img
+}
+
 function run(argv) {
 	const app = Application.currentApplication()
 	app.includeStandardAdditions = true
@@ -86,27 +176,8 @@ function run(argv) {
 
 	print(app, frontPath, title + ' (fronts)')
 
-	const sheets = fronts.length
-	const prompt = `Printing the fronts on ${sheets} sheet${sheets > 1 ? 's' : ''}.\n\n` +
-		'When they have all come out, take the stack without reordering it and load it ' +
-		'back into the rear tray:\n' +
-		'  • printed side facing the back of the printer (blank side towards you)\n' +
-		'  • top of the pages pointing down, going in first\n\n' +
-		'Then click Print Backs. When the backs finish, turn the whole stack over: ' +
-		'page 1 is then on top.'
-	if (!DRY_RUN) {
-		try {
-			app.displayDialog(prompt, {
-				withTitle: 'Two-sided printing',
-				buttons: ['Cancel', 'Print Backs'],
-				defaultButton: 'Print Backs',
-				cancelButton: 'Cancel',
-			})
-		} catch (e) {
-			return 'Cancelled after the fronts'
-		}
-	}
+	if (!DRY_RUN && !askForBacks(fronts.length)) return 'Cancelled after the fronts'
 
 	print(app, backPath, title + ' (backs)')
-	return 'Printed ' + count + ' pages on ' + sheets + ' sheets'
+	return 'Printed ' + count + ' pages on ' + fronts.length + ' sheets'
 }
