@@ -21,6 +21,7 @@ exit_remote() { bytes 27 0 0 0; }
 
 # TI: local time, year as 2 bytes big endian. EPSON_MAINT_TIME pins it for tests.
 remote_ti() {
+	# shellcheck disable=SC2046,SC2086 # split the date into six fields
 	set -- ${EPSON_MAINT_TIME:-$(date '+%Y %m %d %H %M %S')}
 	# Strip the leading zero so 08/09 aren't read as octal.
 	bytes 84 73 8 0 0 $(($1 / 256)) $(($1 % 256)) "${2#0}" "${3#0}" "${4#0}" "${5#0}" "${6#0}"
