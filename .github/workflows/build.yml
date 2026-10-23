@@ -34,7 +34,7 @@ jobs:
           # Tarball timestamps make make re-run automake 1.16; regenerate with the runner's.
           brew install autoconf automake libtool
           autoreconf -fi
-          # Our own fixes for upstream bugs found in review (shell injection, overflows).
+          # Fixes upstream wrapper bugs: shell injection and buffer overflows.
           patch -p1 < ../patches/0001-harden-wrapper.patch
           # Upstream calls a few undeclared functions, which clang rejects; declare them.
           sed -i '' 's|^#include "mem.h"$|#include "mem.h"\
