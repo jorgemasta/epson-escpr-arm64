@@ -79,3 +79,26 @@ jobs:
         with:
           name: epson-escpr-arm64-${{ env.ESCPR_VERSION }}
           path: out/
+
+  release:
+    # Artifacts expire and need a GitHub login; tagged builds get a stable public download.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: epson-escpr-arm64-${{ env.ESCPR_VERSION }}
+          path: epson-escpr-arm64
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod 755 epson-escpr-arm64/filter/*
+          zip -r epson-escpr-arm64.zip epson-escpr-arm64
+          shasum -a 256 epson-escpr-arm64.zip > epson-escpr-arm64.zip.sha256
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes-file epson-escpr-arm64/SHA256SUMS \
+            epson-escpr-arm64.zip epson-escpr-arm64.zip.sha256
