@@ -2,7 +2,8 @@
 
 A native Apple silicon (arm64) build of Epson's open source ESC/P-R CUPS
 driver for the **Epson EcoTank ET-2710 series** (ET-2710, ET-2711, ET-2712,
-ET-2714, ET-2715). It prints from an M1 or later Mac without Rosetta.
+ET-2714, ET-2715). It prints from an M1 or later Mac without Rosetta, and adds
+head cleaning, nozzle checks and guided two-sided printing.
 
 - **For you if:** your Mac has Apple silicon (M1 or later) and macOS 15 or
   later, and your ET-2710 series printer is on the same Wi-Fi or Ethernet
@@ -18,7 +19,13 @@ ET-2714, ET-2715). It prints from an M1 or later Mac without Rosetta.
 
 ## Install
 
-Run these in Terminal. The `sudo` step asks for your Mac password.
+With [Homebrew](https://brew.sh) (asks for your Mac password):
+
+```sh
+brew install --cask jorgemasta/tap/epson-escpr-arm64
+```
+
+Or by hand, in Terminal. The `sudo` step asks for your Mac password.
 
 ```sh
 mkdir -p ~/Downloads/epson-escpr && cd ~/Downloads/epson-escpr
@@ -53,7 +60,9 @@ Running `install.sh` again replaces the files and updates the queue in place.
 | --- | --- |
 | Integrity check | `shasum -a 256 -c SHA256SUMS` in the unpacked folder; stops on any mismatch |
 | Install directory | `/Library/Printers/EPSON-escpr` (owner `root:wheel`) |
-| Filters | `/Library/Printers/EPSON-escpr/filter/epson-escpr`, `/Library/Printers/EPSON-escpr/filter/epson-escpr-wrapper` (mode 755) |
+| Filters | `/Library/Printers/EPSON-escpr/filter/epson-escpr`, `epson-escpr-wrapper` and `commandtoescpr` (mode 755) |
+| Tools | `/Library/Printers/EPSON-escpr/bin/epson-maint` and `epson-duplex` (mode 755), linked from `/usr/local/bin` |
+| Print dialog | `/Library/PDF Services/Print Two-Sided (ET-2710)`, a link to `epson-duplex` |
 | PPD | `/Library/Printers/EPSON-escpr/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd` (mode 644) |
 | Quarantine | removes `com.apple.quarantine` from the install directory |
 | CUPS queue name | `EPSON_ET_2710_arm64` |
@@ -84,6 +93,40 @@ Expected:
 
 To send a test job from the command line: `lp -d EPSON_ET_2710_arm64 <file.pdf>`.
 
+## Maintenance
+
+```sh
+epson-maint nozzle-check   # prints the nozzle check pattern on one sheet
+epson-maint clean          # cleans the print head; uses ink
+```
+
+The nozzle check prints four staircase blocks of fine lines, one per colour.
+If any block has gaps, run `clean`, wait a minute, and check again. Avoid
+running `clean` more than a few times in a row: each one uses ink, and Epson
+recommends waiting at least 12 hours without printing if gaps remain after about three cleanings.
+
+The same two commands are available to any CUPS client as the queue's
+`PrintSelfTestPage` and `Clean` printer commands. They send the byte
+sequences of Epson's `epsMakeMainteCmd()`; CI checks that they match exactly.
+
+## Two-sided printing
+
+The ET-2710 has no duplex unit, so `epson-duplex` prints the odd pages, asks
+you to reload the stack, then prints the even pages.
+
+- **From any app:** in the print dialog, open the **PDF** menu and choose
+  **Print Two-Sided (ET-2710)**.
+- **From Terminal:** `epson-duplex document.pdf`
+
+When the fronts have come out, take the stack without reordering it and load
+it into the rear tray with the printed side facing the back of the printer
+and the top of the pages going in first. Click **Print Backs**. When the
+backs finish, turn the whole stack over: page 1 is on top. An odd page count
+leaves the last back blank.
+
+It binds on the long edge, like a book, and uses the paper size of the first
+page. To print to a queue with another name, set `EPSON_QUEUE`.
+
 ## If the printer has a different Bonjour name
 
 `install.sh` always uses the default name `EPSON ET-2710 Series`. It does not
@@ -101,14 +144,18 @@ check would fail.
 
 ## Uninstall
 
+With Homebrew: `brew uninstall --cask epson-escpr-arm64`. Otherwise:
+
 ```sh
 sudo sh ~/Downloads/epson-escpr/epson-escpr-arm64/uninstall.sh
 ```
 
-Or, without the downloaded folder, the same two steps:
+Or, without the downloaded folder, the same steps:
 
 ```sh
 sudo lpadmin -x EPSON_ET_2710_arm64
+sudo rm -f /usr/local/bin/epson-maint /usr/local/bin/epson-duplex \
+  "/Library/PDF Services/Print Two-Sided (ET-2710)"
 sudo rm -rf /Library/Printers/EPSON-escpr
 ```
 
@@ -120,7 +167,9 @@ and `/Library/Printers/EPSON-escpr` is gone.
 - Printing over Wi-Fi or Ethernet, found by Bonjour
 - Print dialog options from the PPD: paper size, paper type, quality, colour
   or greyscale
-- Not included: scanning, ink levels, USB, duplex (the ET-2710 has no duplex)
+- Nozzle check and head cleaning (see Maintenance)
+- Guided manual two-sided printing (see Two-sided printing)
+- Not included: scanning, ink levels, USB
 
 ## Troubleshooting
 
@@ -151,7 +200,11 @@ is compiled on your Mac. See
    `/Library/Printers/EPSON-escpr/filter`. The PPD's `cupsFilter` line is
    rewritten to that absolute path, because macOS's own CUPS filter directory
    is protected by SIP.
-5. Packages the two filters, the ET-2710 PPD, `install.sh`, `uninstall.sh`,
+5. Checks that `filter/commandtoescpr` emits the same maintenance bytes as
+   Epson's `epsMakeMainteCmd()`, using
+   [`tests/mainte_ref.c`](tests/mainte_ref.c), and adds it to the PPD as the
+   `application/vnd.cups-command` filter.
+6. Packages the filters, the `bin/` tools, the ET-2710 PPD, `install.sh`, `uninstall.sh`,
    `SHA256SUMS` and the upstream `COPYING`. A tag starting with `v` publishes
    `epson-escpr-arm64.zip` and `epson-escpr-arm64.zip.sha256` as a release,
    with `SHA256SUMS` as the release notes.
@@ -163,6 +216,9 @@ The binaries are arm64, ad-hoc signed and not notarized.
 - The filter converts CUPS raster pages into printer commands on standard
   output. macOS runs CUPS filters as the unprivileged `_lp` user in the CUPS
   sandbox.
+- `commandtoescpr` accepts only the `Clean` and `PrintSelfTestPage`
+  commands and rejects anything else.
+- `epson-duplex` passes file names to `lp` single-quoted.
 - The queue is installed as not shared, because job options reach the
   filter's command line.
 

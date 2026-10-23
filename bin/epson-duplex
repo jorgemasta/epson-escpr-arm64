@@ -3,9 +3,10 @@
 // flip the stack, then prints the backs. Works as a CLI (epson-duplex file.pdf) and as a
 // print dialog PDF Service (macOS passes title, options, path).
 //
-// The printer outputs face up and feeds from the front of the rear tray, so the fronts
-// print last page first (stack ends with page 1 on top), and the backs print in the
-// same descending order, with a blank page first when the page count is odd.
+// The printer stacks output face up and feeds the top sheet of the rear tray, and turning
+// the stack over reverses it. So both passes print in ascending order: the backs start on
+// page 1's sheet, and turning the finished stack over puts page 1 on top. An odd page
+// count gets a blank last back.
 
 ObjC.import('Foundation')
 ObjC.import('PDFKit')
@@ -52,8 +53,8 @@ function q(s) {
 function plan(count) {
 	const fronts = []
 	const backs = []
-	for (let n = count; n >= 1; n--) (n % 2 ? fronts : backs).push(n)
-	if (count % 2) backs.unshift(0)
+	for (let n = 1; n <= count; n++) (n % 2 ? fronts : backs).push(n)
+	if (count % 2) backs.push(0)
 	return { fronts, backs }
 }
 
@@ -87,9 +88,12 @@ function run(argv) {
 
 	const sheets = fronts.length
 	const prompt = `Printing the fronts on ${sheets} sheet${sheets > 1 ? 's' : ''}.\n\n` +
-		'When they have all come out, take the stack without reordering it, turn it over ' +
-		'like a book page so the printed side faces down, and load it back into the rear ' +
-		'tray with the same edge going in first.\n\nThen click Print Backs.'
+		'When they have all come out, take the stack without reordering it and load it ' +
+		'back into the rear tray:\n' +
+		'  • printed side facing the back of the printer (blank side towards you)\n' +
+		'  • top of the pages pointing down, going in first\n\n' +
+		'Then click Print Backs. When the backs finish, turn the whole stack over: ' +
+		'page 1 is then on top.'
 	if (!DRY_RUN) {
 		try {
 			app.displayDialog(prompt, {
