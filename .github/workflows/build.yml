@@ -59,21 +59,48 @@ jobs:
             --with-cupsppddir="$INSTALL_DIR/ppd"
           make -j"$(sysctl -n hw.ncpu)"
 
+      - name: Test maintenance commands against Epson's epsMakeMainteCmd
+        run: |
+          src=epson-inkjet-printer-escpr-$ESCPR_VERSION
+          # Same defines as lib/Makefile.am, so the structs match libescpr.a.
+          cc -D__unix=1 -DGCOMSW_PRT_USE_USB -DGCOMSW_PRT_USE_LPR -DGCOMSW_PRT_USE_RAW \
+            -DGCOMSW_EL_CDLABEL -DGCOMSW_EF_MAINTE -DEPS_FILTER \
+            -DGCOMSW_ASYNCJOB_SUPPORT -DGCOMSW_RAWFILE_SUPPORT \
+            -I"$src/lib" -o mainte_ref tests/mainte_ref.c "$src/lib/.libs/libescpr.a" -lm -lpthread
+          for cmd in nozzle:PrintSelfTestPage clean:Clean; do
+            ./mainte_ref "${cmd%%:*}" > expected.bin
+            printf '#CUPS-COMMAND\n%s\n' "${cmd#*:}" \
+              | EPSON_MAINT_TIME="2026 10 23 12 34 56" sh filter/commandtoescpr 1 u t 1 "" > actual.bin
+            test -s expected.bin
+            cmp expected.bin actual.bin
+            echo "${cmd%%:*}: $(wc -c < actual.bin | tr -d ' ') bytes match"
+          done
+
       - name: Stage package
         run: |
           src=epson-inkjet-printer-escpr-$ESCPR_VERSION
           mkdir -p out/filter out/ppd
-          cp "$src/src/epson-escpr" "$src/src/epson-escpr-wrapper" out/filter/
+          mkdir -p out/bin
+          cp "$src/src/epson-escpr" "$src/src/epson-escpr-wrapper" filter/commandtoescpr out/filter/
+          cp bin/epson-maint bin/epson-duplex out/bin/
+          chmod 755 out/filter/* out/bin/*
           # CUPS only looks up bare filter names in its own SIP-protected dir.
           sed "s|^\*cupsFilter: \"application/vnd.cups-raster 0 epson-escpr-wrapper\"|*cupsFilter: \"application/vnd.cups-raster 0 $INSTALL_DIR/filter/epson-escpr-wrapper\"|" \
             "$src/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd" > out/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd
+          # Maintenance: CUPS sends Clean / PrintSelfTestPage command jobs to commandtoescpr.
+          sed -i '' "/^\*cupsFilter: /a\\
+          *cupsFilter: \"application/vnd.cups-command 0 $INSTALL_DIR/filter/commandtoescpr\"\\
+          *cupsCommands: \"Clean PrintSelfTestPage\"
+          " out/ppd/Epson-ET-2710_Series-epson-escpr-en.ppd
+          grep -q "^\*cupsFilter: \"application/vnd.cups-command 0 $INSTALL_DIR/filter/commandtoescpr\"$" out/ppd/*.ppd
+          grep -q '^\*cupsCommands: "Clean PrintSelfTestPage"$' out/ppd/*.ppd
           grep -q "^\*cupsFilter: \"application/vnd.cups-raster 0 $INSTALL_DIR/filter/epson-escpr-wrapper\"$" out/ppd/*.ppd
           strings out/filter/epson-escpr-wrapper | grep -q "^$INSTALL_DIR/filter$"
           cp install.sh uninstall.sh out/
           cp "$src/COPYING" out/COPYING
           file out/filter/*
-          otool -L out/filter/*
-          (cd out && shasum -a 256 filter/* ppd/* install.sh uninstall.sh | tee SHA256SUMS)
+          otool -L out/filter/epson-escpr out/filter/epson-escpr-wrapper
+          (cd out && shasum -a 256 filter/* bin/* ppd/* install.sh uninstall.sh | tee SHA256SUMS)
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

@@ -1,0 +1,29 @@
+#!/bin/sh
+# Run printer maintenance (nozzle check or head cleaning) through the CUPS queue.
+set -eu
+
+QUEUE=${EPSON_QUEUE:-EPSON_ET_2710_arm64}
+
+usage() {
+	cat <<EOF
+Usage: epson-maint nozzle-check | clean
+
+  nozzle-check  Print the nozzle check pattern (uses one sheet of paper).
+  clean         Clean the print head (uses ink; run a nozzle check first).
+
+Queue: $QUEUE (override with EPSON_QUEUE)
+EOF
+}
+
+case "${1:-}" in
+	nozzle-check) command=PrintSelfTestPage ;;
+	clean) command="Clean all" ;;
+	-h|--help) usage; exit 0 ;;
+	*) usage >&2; exit 1 ;;
+esac
+
+tmp=$(mktemp -t epson-maint)
+trap 'rm -f "$tmp"' EXIT
+# CUPS detects the "#CUPS-COMMAND" header and routes the job to commandtoescpr.
+printf '#CUPS-COMMAND\n%s\n' "$command" > "$tmp"
+lp -d "$QUEUE" -t "epson-maint $1" "$tmp"

@@ -1,0 +1,108 @@
+#!/usr/bin/osascript -l JavaScript
+// Manual two-sided printing for printers without duplex: prints the fronts, asks you to
+// flip the stack, then prints the backs. Works as a CLI (epson-duplex file.pdf) and as a
+// print dialog PDF Service (macOS passes title, options, path).
+//
+// The printer outputs face up and feeds from the front of the rear tray, so the fronts
+// print last page first (stack ends with page 1 on top), and the backs print in the
+// same descending order, with a blank page first when the page count is odd.
+
+ObjC.import('Foundation')
+ObjC.import('PDFKit')
+
+const QUEUE = env('EPSON_QUEUE') || 'EPSON_ET_2710_arm64'
+const DRY_RUN = env('EPSON_DUPLEX_DRY_RUN') === '1'
+
+/** Read an environment variable, or '' when unset. */
+function env(name) {
+	const v = $.NSProcessInfo.processInfo.environment.objectForKey(name)
+	return v.isNil() ? '' : v.js
+}
+
+/** Build a PDF from 1-based page numbers of src; 0 means a blank page. */
+function buildPdf(src, pages, path) {
+	const out = $.PDFDocument.alloc.init
+	const box = src.pageAtIndex(0).boundsForBox($.kPDFDisplayBoxMediaBox)
+	pages.forEach((n, i) => {
+		let page
+		if (n === 0) {
+			page = $.PDFPage.alloc.init
+			page.setBoundsForBox(box, $.kPDFDisplayBoxMediaBox)
+		} else {
+			page = src.pageAtIndex(n - 1).copy
+		}
+		out.insertPageAtIndex(page, i)
+	})
+	if (!out.writeToFile(path)) throw new Error('Cannot write ' + path)
+}
+
+/** Print a PDF in the order given, bypassing the queue's default reverse order. */
+function print(app, path, title) {
+	const cmd = `lp -d ${q(QUEUE)} -t ${q(title)} -o outputorder=normal ${q(path)}`
+	if (DRY_RUN) console.log(cmd)
+	else app.doShellScript(cmd)
+}
+
+/** Quote a string for the shell. */
+function q(s) {
+	return "'" + String(s).replace(/'/g, "'\\''") + "'"
+}
+
+/** Odd pages and even pages (padded with a blank) in print order. */
+function plan(count) {
+	const fronts = []
+	const backs = []
+	for (let n = count; n >= 1; n--) (n % 2 ? fronts : backs).push(n)
+	if (count % 2) backs.unshift(0)
+	return { fronts, backs }
+}
+
+function run(argv) {
+	const app = Application.currentApplication()
+	app.includeStandardAdditions = true
+
+	// PDF Services pass (title, options, path); the CLI passes just the path.
+	const path = argv.length >= 3 ? argv[2] : argv[0]
+	if (!path) return 'Usage: epson-duplex file.pdf'
+	const title = argv.length >= 3 ? argv[0] : $(path).lastPathComponent.js
+
+	const src = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(path))
+	if (src.isNil()) throw new Error('Not a PDF: ' + path)
+	const count = Number(src.pageCount)
+
+	const tmp = $.NSTemporaryDirectory().js
+	if (count === 1) {
+		print(app, path, title)
+		return 'Single page, printed one side'
+	}
+
+	const { fronts, backs } = plan(count)
+	const frontPath = tmp + 'epson-duplex-front.pdf'
+	const backPath = tmp + 'epson-duplex-back.pdf'
+	buildPdf(src, fronts, frontPath)
+	buildPdf(src, backs, backPath)
+	if (DRY_RUN) console.log('fronts ' + fronts.join(',') + ' | backs ' + backs.join(','))
+
+	print(app, frontPath, title + ' (fronts)')
+
+	const sheets = fronts.length
+	const prompt = `Printing the fronts on ${sheets} sheet${sheets > 1 ? 's' : ''}.\n\n` +
+		'When they have all come out, take the stack without reordering it, turn it over ' +
+		'like a book page so the printed side faces down, and load it back into the rear ' +
+		'tray with the same edge going in first.\n\nThen click Print Backs.'
+	if (!DRY_RUN) {
+		try {
+			app.displayDialog(prompt, {
+				withTitle: 'Two-sided printing',
+				buttons: ['Cancel', 'Print Backs'],
+				defaultButton: 'Print Backs',
+				cancelButton: 'Cancel',
+			})
+		} catch (e) {
+			return 'Cancelled after the fronts'
+		}
+	}
+
+	print(app, backPath, title + ' (backs)')
+	return 'Printed ' + count + ' pages on ' + sheets + ' sheets'
+}
